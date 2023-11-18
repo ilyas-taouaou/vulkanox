@@ -1,21 +1,29 @@
 use std::sync::Arc;
+use std::time::Instant;
 
 use anyhow::Result;
-use vulkano::command_buffer::{AutoCommandBufferBuilder, ClearColorImageInfo, CommandBufferUsage};
+use palette::Srgba;
+use vulkano::command_buffer::{
+    AutoCommandBufferBuilder, CommandBufferUsage, RenderingAttachmentInfo, RenderingInfo,
+};
 use vulkano::device::DeviceOwned;
-use vulkano::format::ClearColorValue;
+use vulkano::format::ClearValue;
 use vulkano::format::Format::B8G8R8A8_SRGB;
 use vulkano::image::view::ImageView;
 use vulkano::image::{Image, ImageUsage};
+use vulkano::pipeline::graphics::viewport::Viewport;
+use vulkano::pipeline::Pipeline;
+use vulkano::render_pass::{AttachmentLoadOp, AttachmentStoreOp};
 use vulkano::swapchain::{
     acquire_next_image, PresentMode, Surface, SurfaceInfo, Swapchain, SwapchainCreateInfo,
     SwapchainPresentInfo,
 };
 use vulkano::sync::GpuFuture;
 use vulkano::{sync, Validated, VulkanError};
+use winit::dpi::PhysicalPosition;
 use winit::window::Window;
 
-use crate::vulkan_device::VulkanDevice;
+use crate::vulkan_device::{vs, VulkanDevice};
 
 pub struct VulkanRenderer {
     vulkan_device: Arc<VulkanDevice>,
@@ -25,6 +33,10 @@ pub struct VulkanRenderer {
     swapchain_image_views: Vec<Arc<ImageView>>,
     clear_color: [f32; 4],
     previous_frame_end: Option<Box<dyn GpuFuture>>,
+    start_time: Instant,
+    window_index: usize,
+    window_count: usize,
+    mouse_position: [f32; 2],
 }
 
 impl VulkanRenderer {
@@ -34,6 +46,8 @@ impl VulkanRenderer {
         clear_color: [f32; 4],
         is_vsync: bool,
         image_usage: ImageUsage,
+        window_index: usize,
+        window_count: usize,
     ) -> Result<Self> {
         let device = vulkan_device.queue().device();
         let physical_device = device.physical_device();
@@ -98,7 +112,19 @@ impl VulkanRenderer {
             swapchain_image_views,
             clear_color,
             previous_frame_end,
+            start_time: Instant::now(),
+            window_index,
+            window_count,
+            mouse_position: [0.0, 0.0],
         })
+    }
+
+    pub fn on_mouse_moved(&mut self, position: PhysicalPosition<f64>) {
+        let size = self.window.inner_size();
+        self.mouse_position = [
+            position.x as f32 / size.width as f32,
+            position.y as f32 / size.height as f32,
+        ];
     }
 
     pub fn recreate(&mut self) -> Result<()> {
@@ -158,10 +184,47 @@ impl VulkanRenderer {
         )
         .unwrap();
 
-        builder.clear_color_image(ClearColorImageInfo {
-            clear_value: ClearColorValue::Float(self.clear_color),
-            ..ClearColorImageInfo::image(Arc::clone(&self.swapchain_images[image_index as usize]))
-        })?;
+        let extent = self.swapchain.image_extent();
+
+        let clear_color = Srgba::new(0.1, 0.1, 0.1, 1.0);
+
+        let push_constants = vs::PushConstantData {
+            time: (Instant::now() - self.start_time).as_secs_f32().into(),
+            mousePosition: self.mouse_position,
+        };
+
+        builder
+            .begin_rendering(RenderingInfo {
+                color_attachments: vec![Some(RenderingAttachmentInfo {
+                    load_op: AttachmentLoadOp::Clear,
+                    store_op: AttachmentStoreOp::Store,
+                    clear_value: Some(ClearValue::Float(clear_color.into_linear().into())),
+                    ..RenderingAttachmentInfo::image_view(Arc::clone(
+                        &self.swapchain_image_views[image_index as usize],
+                    ))
+                })],
+                ..Default::default()
+            })?
+            .set_viewport(
+                0,
+                [Viewport {
+                    offset: [0.0, 0.0],
+                    extent: [extent[0] as f32, extent[1] as f32],
+                    depth_range: 0.0..=1.0,
+                }]
+                .into_iter()
+                .collect(),
+            )?
+            .bind_pipeline_graphics(Arc::clone(self.vulkan_device.graphics_pipeline()))?
+            .bind_vertex_buffers(0, self.vulkan_device.vertex_buffer().clone())?
+            .bind_index_buffer(self.vulkan_device.index_buffer().clone())?
+            .push_constants(
+                self.vulkan_device.graphics_pipeline().layout().clone(),
+                0,
+                push_constants,
+            )?
+            .draw(self.vulkan_device.vertex_buffer().len() as u32, 10, 0, 0)?
+            .end_rendering()?;
 
         let command_buffer = builder.build()?;
 

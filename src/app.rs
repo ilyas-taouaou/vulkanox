@@ -54,7 +54,9 @@ impl VisualSystem {
                     Arc::clone(&window),
                     [c, c, c, c],
                     true,
-                    ImageUsage::COLOR_ATTACHMENT | ImageUsage::TRANSFER_DST,
+                    ImageUsage::COLOR_ATTACHMENT,
+                    window_index,
+                    windows.len(),
                 )?)),
             );
         }
@@ -82,7 +84,9 @@ impl VisualSystem {
                     Arc::clone(&window),
                     [c, c, c, c],
                     true,
-                    ImageUsage::COLOR_ATTACHMENT | ImageUsage::TRANSFER_DST,
+                    ImageUsage::COLOR_ATTACHMENT,
+                    window_index,
+                    self.windows.len(),
                 )?)),
             );
         }
@@ -103,6 +107,11 @@ impl VisualSystem {
             WindowEvent::Resized(_) => self.vulkan_renderers[&window_id].borrow_mut().recreate()?,
             WindowEvent::RedrawRequested => {
                 self.vulkan_renderers[&window_id].borrow_mut().render()?
+            }
+            WindowEvent::CursorMoved { position, .. } => {
+                self.vulkan_renderers[&window_id]
+                    .borrow_mut()
+                    .on_mouse_moved(position);
             }
             _ => {}
         };
