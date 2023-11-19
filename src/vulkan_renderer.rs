@@ -11,7 +11,7 @@ use vulkano::device::DeviceOwned;
 use vulkano::format::ClearValue;
 use vulkano::format::Format::B8G8R8A8_SRGB;
 use vulkano::image::view::ImageView;
-use vulkano::image::{Image, ImageCreateInfo, ImageUsage, SampleCount};
+use vulkano::image::{Image, ImageCreateInfo, ImageUsage};
 use vulkano::memory::allocator::AllocationCreateInfo;
 use vulkano::pipeline::graphics::viewport::Viewport;
 use vulkano::pipeline::Pipeline;
@@ -172,6 +172,25 @@ impl VulkanRenderer {
             .map(|image| ImageView::new_default(Arc::clone(image)))
             .try_collect::<Vec<_>>()?;
         self.swapchain_images = new_swapchain_images;
+        self.intermediary_image = ImageView::new_default(
+            Image::new(
+                self.vulkan_device.memory_allocator().clone(),
+                ImageCreateInfo {
+                    format: self.swapchain.image_format(),
+                    extent: [
+                        self.swapchain.image_extent()[0],
+                        self.swapchain.image_extent()[1],
+                        1,
+                    ],
+                    usage: ImageUsage::COLOR_ATTACHMENT | ImageUsage::TRANSIENT_ATTACHMENT,
+                    samples: self.vulkan_device.samples(),
+                    ..Default::default()
+                },
+                AllocationCreateInfo::default(),
+            )
+            .unwrap(),
+        )
+        .unwrap();
 
         Ok(())
     }
@@ -244,7 +263,7 @@ impl VulkanRenderer {
                 0,
                 push_constants,
             )?
-            .draw(self.vulkan_device.vertex_buffer().len() as u32, 10, 0, 0)?
+            .draw_indexed(self.vulkan_device.index_buffer().len() as u32, 1, 0, 0, 0)?
             .end_rendering()?;
 
         let command_buffer = builder.build()?;

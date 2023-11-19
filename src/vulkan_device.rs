@@ -1,9 +1,8 @@
 use std::sync::Arc;
 
 use anyhow::Result;
-use tracing::info;
 use vulkano::buffer::allocator::{SubbufferAllocator, SubbufferAllocatorCreateInfo};
-use vulkano::buffer::{Buffer, BufferContents, BufferCreateInfo, BufferUsage, Subbuffer};
+use vulkano::buffer::{BufferContents, BufferUsage, Subbuffer};
 use vulkano::command_buffer::allocator::{
     StandardCommandBufferAllocator, StandardCommandBufferAllocatorCreateInfo,
 };
@@ -11,8 +10,7 @@ use vulkano::command_buffer::{AutoCommandBufferBuilder, CommandBufferUsage, Copy
 use vulkano::device::{Device, DeviceCreateInfo, Features, Queue, QueueCreateInfo};
 use vulkano::format::Format;
 use vulkano::image::SampleCount;
-use vulkano::memory::allocator::{AllocationCreateInfo, MemoryTypeFilter, StandardMemoryAllocator};
-use vulkano::memory::MemoryPropertyFlags;
+use vulkano::memory::allocator::{MemoryTypeFilter, StandardMemoryAllocator};
 use vulkano::pipeline::graphics::color_blend::{ColorBlendAttachmentState, ColorBlendState};
 use vulkano::pipeline::graphics::input_assembly::InputAssemblyState;
 use vulkano::pipeline::graphics::multisample::MultisampleState;
@@ -36,7 +34,7 @@ pub struct VulkanDevice {
     command_allocator: Arc<StandardCommandBufferAllocator>,
     graphics_pipeline: Arc<GraphicsPipeline>,
     vertex_buffer: Subbuffer<[Vertex]>,
-    index_buffer: Subbuffer<[u16]>,
+    index_buffer: Subbuffer<[u32]>,
     samples: SampleCount,
 }
 
@@ -47,7 +45,6 @@ pub mod vs {
                 #version 460
 
                 layout(location = 0) in vec3 position;
-                layout(location = 1) in vec3 color;
                 
                 layout(location = 0) out vec3 fragColor;
                 
@@ -57,8 +54,8 @@ pub mod vs {
                 } pc;
 
                 void main() {
-                    gl_Position = vec4(position + vec3(pc.mousePosition.x, pc.mousePosition.y,0), 1.0);
-                    fragColor = color * vec3(sin(pc.time*5.0)*0.5+0.5);
+                    gl_Position = vec4(position, 1.0);
+                    fragColor = position;
                 }
             ",
     }
@@ -86,8 +83,6 @@ mod fs {
 pub struct Vertex {
     #[format(R32G32B32_SFLOAT)]
     position: [f32; 3],
-    #[format(R32G32B32_SFLOAT)]
-    color: [f32; 3],
 }
 
 fn align_usize(number: usize, alignment: usize) -> usize {
@@ -125,22 +120,17 @@ impl VulkanDevice {
             StandardCommandBufferAllocatorCreateInfo::default(),
         ));
 
-        let vertices = [
-            Vertex {
-                position: [-0.5, -0.25, 0.0],
-                color: [1.0, 0.0, 0.0],
-            },
-            Vertex {
-                position: [0.0, 0.5, 0.0],
-                color: [0.0, 1.0, 0.0],
-            },
-            Vertex {
-                position: [0.25, -0.1, 0.0],
-                color: [0.0, 0.0, 1.0],
-            },
-        ];
+        let (document, buffers, images) = gltf::import("assets/cube.gltf")?;
 
-        let indices = [0u16, 1, 2];
+        let buffer = buffers.into_iter().next().unwrap().0;
+        let vertex_buffer_view = document.views().next().unwrap();
+        let index_buffer_view = document.views().next().unwrap();
+        let vertices =
+            bytemuck::cast_slice(&buffer[vertex_buffer_view.offset()..vertex_buffer_view.length()]);
+        let indices = bytemuck::cast_slice(
+            &buffer[index_buffer_view.offset()
+                ..index_buffer_view.offset() + index_buffer_view.length()],
+        );
 
         let max_initial_data_size = align_usize(
             std::mem::size_of_val(&vertices) + std::mem::size_of_val(&indices),
@@ -176,9 +166,7 @@ impl VulkanDevice {
         let vertex_staging_buffer =
             host_buffer_allocator.allocate_slice::<Vertex>(vertices.len() as DeviceSize)?;
         let index_staging_buffer =
-            host_buffer_allocator.allocate_slice::<u16>(indices.len() as DeviceSize)?;
-
-        // having a break
+            host_buffer_allocator.allocate_slice::<u32>(indices.len() as DeviceSize)?;
 
         {
             let mut vertex_writer = vertex_staging_buffer.write()?;
@@ -242,7 +230,7 @@ impl VulkanDevice {
                     vertex_input_state: Some(vertex_input_state),
                     viewport_state: Some(ViewportState::default()),
                     rasterization_state: Some(RasterizationState {
-                        cull_mode: CullMode::Back,
+                        cull_mode: CullMode::None,
                         ..Default::default()
                     }),
                     multisample_state: Some(MultisampleState {
@@ -293,7 +281,7 @@ impl VulkanDevice {
         &self.vertex_buffer
     }
 
-    pub fn index_buffer(&self) -> &Subbuffer<[u16]> {
+    pub fn index_buffer(&self) -> &Subbuffer<[u32]> {
         &self.index_buffer
     }
 
