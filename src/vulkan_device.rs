@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use anyhow::Result;
+use tracing::info;
 use vulkano::buffer::allocator::{SubbufferAllocator, SubbufferAllocatorCreateInfo};
 use vulkano::buffer::{Buffer, BufferContents, BufferCreateInfo, BufferUsage, Subbuffer};
 use vulkano::command_buffer::allocator::{
@@ -9,6 +10,7 @@ use vulkano::command_buffer::allocator::{
 use vulkano::command_buffer::{AutoCommandBufferBuilder, CommandBufferUsage, CopyBufferInfo};
 use vulkano::device::{Device, DeviceCreateInfo, Features, Queue, QueueCreateInfo};
 use vulkano::format::Format;
+use vulkano::image::SampleCount;
 use vulkano::memory::allocator::{AllocationCreateInfo, MemoryTypeFilter, StandardMemoryAllocator};
 use vulkano::memory::MemoryPropertyFlags;
 use vulkano::pipeline::graphics::color_blend::{ColorBlendAttachmentState, ColorBlendState};
@@ -35,6 +37,7 @@ pub struct VulkanDevice {
     graphics_pipeline: Arc<GraphicsPipeline>,
     vertex_buffer: Subbuffer<[Vertex]>,
     index_buffer: Subbuffer<[u16]>,
+    samples: SampleCount,
 }
 
 pub mod vs {
@@ -87,8 +90,12 @@ pub struct Vertex {
     color: [f32; 3],
 }
 
+fn align_usize(number: usize, alignment: usize) -> usize {
+    ((number as f64 / alignment as f64).ceil()) as usize * alignment
+}
+
 impl VulkanDevice {
-    pub(crate) fn new(instance: Arc<VulkanInstance>) -> Result<Self> {
+    pub(crate) fn new(instance: Arc<VulkanInstance>, samples: SampleCount) -> Result<Self> {
         let physical_device = instance.physical_device();
         let queue_family_index = instance.queue_family_index();
         let device_extensions = instance.device_extensions();
@@ -135,42 +142,27 @@ impl VulkanDevice {
 
         let indices = [0u16, 1, 2];
 
-        let vertex_buffer = Buffer::new_slice(
-            memory_allocator.clone(),
-            BufferCreateInfo {
-                usage: BufferUsage::VERTEX_BUFFER | BufferUsage::TRANSFER_DST,
-                ..Default::default()
-            },
-            AllocationCreateInfo {
-                memory_type_filter: MemoryTypeFilter {
-                    required_flags: MemoryPropertyFlags::DEVICE_LOCAL,
-                    ..Default::default()
-                },
-                ..Default::default()
-            },
-            vertices.len() as DeviceSize,
-        )?;
+        let max_initial_data_size = align_usize(
+            std::mem::size_of_val(&vertices) + std::mem::size_of_val(&indices),
+            256,
+        );
 
-        let index_buffer = Buffer::new_slice(
-            memory_allocator.clone(),
-            BufferCreateInfo {
-                usage: BufferUsage::INDEX_BUFFER | BufferUsage::TRANSFER_DST,
-                ..Default::default()
-            },
-            AllocationCreateInfo {
-                memory_type_filter: MemoryTypeFilter {
-                    required_flags: MemoryPropertyFlags::DEVICE_LOCAL,
-                    ..Default::default()
-                },
-                ..Default::default()
-            },
-            indices.len() as DeviceSize,
-        )?;
-
-        let subbuffer_allocator = SubbufferAllocator::new(
+        let device_buffer_allocator = SubbufferAllocator::new(
             memory_allocator.clone(),
             SubbufferAllocatorCreateInfo {
-                arena_size: vertex_buffer.size() + index_buffer.size(),
+                arena_size: max_initial_data_size as DeviceSize,
+                buffer_usage: BufferUsage::TRANSFER_DST
+                    | BufferUsage::VERTEX_BUFFER
+                    | BufferUsage::INDEX_BUFFER,
+                memory_type_filter: MemoryTypeFilter::PREFER_DEVICE,
+                ..Default::default()
+            },
+        );
+
+        let host_buffer_allocator = SubbufferAllocator::new(
+            memory_allocator.clone(),
+            SubbufferAllocatorCreateInfo {
+                arena_size: max_initial_data_size as DeviceSize,
                 buffer_usage: BufferUsage::TRANSFER_SRC,
                 memory_type_filter: MemoryTypeFilter::PREFER_HOST
                     | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
@@ -178,10 +170,15 @@ impl VulkanDevice {
             },
         );
 
+        let vertex_buffer = device_buffer_allocator.allocate_slice(vertices.len() as DeviceSize)?;
+        let index_buffer = device_buffer_allocator.allocate_slice(indices.len() as DeviceSize)?;
+
         let vertex_staging_buffer =
-            subbuffer_allocator.allocate_slice::<Vertex>(vertices.len() as DeviceSize)?;
+            host_buffer_allocator.allocate_slice::<Vertex>(vertices.len() as DeviceSize)?;
         let index_staging_buffer =
-            subbuffer_allocator.allocate_slice::<u16>(indices.len() as DeviceSize)?;
+            host_buffer_allocator.allocate_slice::<u16>(indices.len() as DeviceSize)?;
+
+        // having a break
 
         {
             let mut vertex_writer = vertex_staging_buffer.write()?;
@@ -248,7 +245,10 @@ impl VulkanDevice {
                         cull_mode: CullMode::Back,
                         ..Default::default()
                     }),
-                    multisample_state: Some(MultisampleState::default()),
+                    multisample_state: Some(MultisampleState {
+                        rasterization_samples: samples,
+                        ..Default::default()
+                    }),
                     color_blend_state: Some(ColorBlendState::with_attachment_states(
                         subpass.color_attachment_formats.len() as u32,
                         ColorBlendAttachmentState::default(),
@@ -269,6 +269,7 @@ impl VulkanDevice {
             graphics_pipeline,
             vertex_buffer,
             index_buffer,
+            samples,
         })
     }
 
@@ -294,5 +295,9 @@ impl VulkanDevice {
 
     pub fn index_buffer(&self) -> &Subbuffer<[u16]> {
         &self.index_buffer
+    }
+
+    pub fn samples(&self) -> SampleCount {
+        self.samples
     }
 }

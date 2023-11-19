@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use anyhow::Result;
-use vulkano::image::ImageUsage;
+use vulkano::image::{ImageUsage, SampleCount};
 use winit::event::{Event, WindowEvent};
 use winit::event_loop::{EventLoop, EventLoopWindowTarget};
 use winit::window::{Window, WindowBuilder, WindowId};
@@ -30,11 +30,11 @@ impl VisualSystem {
         let primary_window_id = primary_window.id();
 
         let vulkan_instance = Arc::new(VulkanInstance::new(&primary_window)?);
-        let vulkan_device = Arc::new(VulkanDevice::new(Arc::clone(&vulkan_instance))?);
+        let vulkan_device = Arc::new(VulkanDevice::new(Arc::clone(&vulkan_instance), SampleCount::Sample8)?);
 
         let mut windows = HashMap::from([(primary_window_id, primary_window)]);
 
-        for i in 0..3 {
+        for i in 0..0 {
             let window = Arc::new(
                 WindowBuilder::new()
                     .with_visible(false)

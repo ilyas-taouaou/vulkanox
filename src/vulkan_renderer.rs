@@ -4,13 +4,15 @@ use std::time::Instant;
 use anyhow::Result;
 use palette::Srgba;
 use vulkano::command_buffer::{
-    AutoCommandBufferBuilder, CommandBufferUsage, RenderingAttachmentInfo, RenderingInfo,
+    AutoCommandBufferBuilder, CommandBufferUsage, RenderingAttachmentInfo,
+    RenderingAttachmentResolveInfo, RenderingInfo,
 };
 use vulkano::device::DeviceOwned;
 use vulkano::format::ClearValue;
 use vulkano::format::Format::B8G8R8A8_SRGB;
 use vulkano::image::view::ImageView;
-use vulkano::image::{Image, ImageUsage};
+use vulkano::image::{Image, ImageCreateInfo, ImageUsage, SampleCount};
+use vulkano::memory::allocator::AllocationCreateInfo;
 use vulkano::pipeline::graphics::viewport::Viewport;
 use vulkano::pipeline::Pipeline;
 use vulkano::render_pass::{AttachmentLoadOp, AttachmentStoreOp};
@@ -31,6 +33,7 @@ pub struct VulkanRenderer {
     swapchain: Arc<Swapchain>,
     swapchain_images: Vec<Arc<Image>>,
     swapchain_image_views: Vec<Arc<ImageView>>,
+    intermediary_image: Arc<ImageView>,
     clear_color: [f32; 4],
     previous_frame_end: Option<Box<dyn GpuFuture>>,
     start_time: Instant,
@@ -102,6 +105,22 @@ impl VulkanRenderer {
             .map(|image| ImageView::new_default(Arc::clone(image)))
             .try_collect::<Vec<_>>()?;
 
+        let intermediary_image = ImageView::new_default(
+            Image::new(
+                vulkan_device.memory_allocator().clone(),
+                ImageCreateInfo {
+                    format: swapchain.image_format(),
+                    extent: [swapchain.image_extent()[0], swapchain.image_extent()[1], 1],
+                    usage: ImageUsage::COLOR_ATTACHMENT | ImageUsage::TRANSIENT_ATTACHMENT,
+                    samples: vulkan_device.samples(),
+                    ..Default::default()
+                },
+                AllocationCreateInfo::default(),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+
         let previous_frame_end = Some(sync::now(device.clone()).boxed());
 
         Ok(Self {
@@ -110,6 +129,7 @@ impl VulkanRenderer {
             swapchain,
             swapchain_images,
             swapchain_image_views,
+            intermediary_image,
             clear_color,
             previous_frame_end,
             start_time: Instant::now(),
@@ -199,9 +219,10 @@ impl VulkanRenderer {
                     load_op: AttachmentLoadOp::Clear,
                     store_op: AttachmentStoreOp::Store,
                     clear_value: Some(ClearValue::Float(clear_color.into_linear().into())),
-                    ..RenderingAttachmentInfo::image_view(Arc::clone(
+                    resolve_info: Some(RenderingAttachmentResolveInfo::image_view(Arc::clone(
                         &self.swapchain_image_views[image_index as usize],
-                    ))
+                    ))),
+                    ..RenderingAttachmentInfo::image_view(Arc::clone(&self.intermediary_image))
                 })],
                 ..Default::default()
             })?
