@@ -4,7 +4,7 @@ Safe rust vulkan project.
 Standing on the shoulders of giants:
 - [vulkano](https://github.com/vulkano-rs/vulkano)
 - [winit](https://github.com/rust-windowing/winit)
-- [nalgebra](https://crates.io/crates/nalgebra)
+- [nalgebra](https://github.com/dimforge/nalgebra)
 - [gltf](https://github.com/gltf-rs/gltf)
 
 The project is still floating, thanks to:
