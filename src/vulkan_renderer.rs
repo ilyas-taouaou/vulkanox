@@ -8,13 +8,13 @@ use vulkano::command_buffer::{
     RenderingAttachmentResolveInfo, RenderingInfo,
 };
 use vulkano::device::DeviceOwned;
-use vulkano::format::ClearValue;
 use vulkano::format::Format::B8G8R8A8_SRGB;
+use vulkano::format::{ClearValue, Format};
 use vulkano::image::view::ImageView;
 use vulkano::image::{Image, ImageCreateInfo, ImageUsage};
 use vulkano::memory::allocator::AllocationCreateInfo;
 use vulkano::pipeline::graphics::viewport::Viewport;
-use vulkano::pipeline::Pipeline;
+use vulkano::pipeline::{Pipeline, PipelineBindPoint};
 use vulkano::render_pass::{AttachmentLoadOp, AttachmentStoreOp};
 use vulkano::swapchain::{
     acquire_next_image, PresentMode, Surface, SurfaceInfo, Swapchain, SwapchainCreateInfo,
@@ -34,6 +34,7 @@ pub struct VulkanRenderer {
     swapchain_images: Vec<Arc<Image>>,
     swapchain_image_views: Vec<Arc<ImageView>>,
     intermediary_image: Arc<ImageView>,
+    depth_view: Arc<ImageView>,
     clear_color: [f32; 4],
     previous_frame_end: Option<Box<dyn GpuFuture>>,
     start_time: Instant,
@@ -121,6 +122,18 @@ impl VulkanRenderer {
         )
         .unwrap();
 
+        let depth_view = ImageView::new_default(Image::new(
+            vulkan_device.memory_allocator().clone(),
+            ImageCreateInfo {
+                format: Format::D16_UNORM,
+                extent: [swapchain.image_extent()[0], swapchain.image_extent()[1], 1],
+                usage: ImageUsage::DEPTH_STENCIL_ATTACHMENT | ImageUsage::TRANSIENT_ATTACHMENT,
+                samples: vulkan_device.samples(),
+                ..Default::default()
+            },
+            AllocationCreateInfo::default(),
+        )?)?;
+
         let previous_frame_end = Some(sync::now(device.clone()).boxed());
 
         Ok(Self {
@@ -130,6 +143,7 @@ impl VulkanRenderer {
             swapchain_images,
             swapchain_image_views,
             intermediary_image,
+            depth_view,
             clear_color,
             previous_frame_end,
             start_time: Instant::now(),
@@ -172,25 +186,37 @@ impl VulkanRenderer {
             .map(|image| ImageView::new_default(Arc::clone(image)))
             .try_collect::<Vec<_>>()?;
         self.swapchain_images = new_swapchain_images;
-        self.intermediary_image = ImageView::new_default(
-            Image::new(
-                self.vulkan_device.memory_allocator().clone(),
-                ImageCreateInfo {
-                    format: self.swapchain.image_format(),
-                    extent: [
-                        self.swapchain.image_extent()[0],
-                        self.swapchain.image_extent()[1],
-                        1,
-                    ],
-                    usage: ImageUsage::COLOR_ATTACHMENT | ImageUsage::TRANSIENT_ATTACHMENT,
-                    samples: self.vulkan_device.samples(),
-                    ..Default::default()
-                },
-                AllocationCreateInfo::default(),
-            )
-            .unwrap(),
-        )
-        .unwrap();
+        self.intermediary_image = ImageView::new_default(Image::new(
+            self.vulkan_device.memory_allocator().clone(),
+            ImageCreateInfo {
+                format: self.swapchain.image_format(),
+                extent: [
+                    self.swapchain.image_extent()[0],
+                    self.swapchain.image_extent()[1],
+                    1,
+                ],
+                usage: ImageUsage::COLOR_ATTACHMENT | ImageUsage::TRANSIENT_ATTACHMENT,
+                samples: self.vulkan_device.samples(),
+                ..Default::default()
+            },
+            AllocationCreateInfo::default(),
+        )?)?;
+
+        self.depth_view = ImageView::new_default(Image::new(
+            self.vulkan_device.memory_allocator().clone(),
+            ImageCreateInfo {
+                format: Format::D16_UNORM,
+                extent: [
+                    self.swapchain.image_extent()[0],
+                    self.swapchain.image_extent()[1],
+                    1,
+                ],
+                usage: ImageUsage::DEPTH_STENCIL_ATTACHMENT | ImageUsage::TRANSIENT_ATTACHMENT,
+                samples: self.vulkan_device.samples(),
+                ..Default::default()
+            },
+            AllocationCreateInfo::default(),
+        )?)?;
 
         Ok(())
     }
@@ -243,6 +269,11 @@ impl VulkanRenderer {
                     ))),
                     ..RenderingAttachmentInfo::image_view(Arc::clone(&self.intermediary_image))
                 })],
+                depth_attachment: Some(RenderingAttachmentInfo {
+                    load_op: AttachmentLoadOp::Clear,
+                    clear_value: Some(1.0f32.into()),
+                    ..RenderingAttachmentInfo::image_view(Arc::clone(&self.depth_view))
+                }),
                 ..Default::default()
             })?
             .set_viewport(
@@ -258,6 +289,12 @@ impl VulkanRenderer {
             .bind_pipeline_graphics(Arc::clone(self.vulkan_device.graphics_pipeline()))?
             .bind_vertex_buffers(0, self.vulkan_device.vertex_buffer().clone())?
             .bind_index_buffer(self.vulkan_device.index_buffer().clone())?
+            .bind_descriptor_sets(
+                PipelineBindPoint::Graphics,
+                Arc::clone(self.vulkan_device.graphics_pipeline().layout()),
+                0,
+                Arc::clone(self.vulkan_device.set()),
+            )?
             .push_constants(
                 self.vulkan_device.graphics_pipeline().layout().clone(),
                 0,
