@@ -6,6 +6,7 @@ Standing on the shoulders of giants:
 - [winit](https://github.com/rust-windowing/winit)
 - [nalgebra](https://github.com/dimforge/nalgebra)
 - [gltf](https://github.com/gltf-rs/gltf)
+And more (Checkout cargo.toml)...
 
 The project is still floating, thanks to:
 - [RenderDoc](https://github.com/baldurk/renderdoc)
